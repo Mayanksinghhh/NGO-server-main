@@ -16,27 +16,32 @@ const ListingModels = {
 // @route   POST /api/listings/:type
 exports.createListing = async (req, res) => {
   try {
-    const { type } = req.params
-    const listingModel = ListingModels[type]
+    const { type } = req.params;
+    const listingModel = ListingModels[type];
 
     if (!listingModel) {
       return res.status(400).json({
         success: false,
         message: "Invalid listing type",
-      })
+      });
     }
 
-    // Add user from authentication middleware
-    req.body.user = req.user.id
+    // Handle file uploads if any
+    const documents = req.files?.map(file => file.path) || [];
 
-    // Set initial status to pending for moderation
-    req.body.status = "pending"
+    // Create listing data
+    const listingData = {
+      ...req.body,
+      user: req.user.id,
+      status: "pending",
+      documents // Add uploaded documents
+    };
 
-    const listing = new listingModel(req.body)
-    await listing.save()
+    const listing = new listingModel(listingData);
+    await listing.save();
 
-    // Create notification for the user about pending approval
-    const Notification = require("../models/Notification")
+    // Create notification
+    const Notification = require("../models/Notification");
     await Notification.createNotification({
       user: req.user.id,
       type: "listing_created",
@@ -45,20 +50,21 @@ exports.createListing = async (req, res) => {
         entityId: listing._id,
         type: "Listing",
       },
-    })
+    });
 
     res.status(201).json({
       success: true,
       data: listing,
-    })
+    });
   } catch (error) {
+    console.error("Error creating listing:", error);
     res.status(500).json({
       success: false,
       message: "Error creating listing",
       error: error.message,
-    })
+    });
   }
-}
+};
 
 // @desc    Get all listings of a specific type
 // @route   GET /api/listings/:type
@@ -154,6 +160,7 @@ exports.getSingleListing = async (req, res) => {
         message: "Listing not found",
       })
     }
+console.log("Listing data-->",listing);
 
     res.status(200).json({
       success: true,

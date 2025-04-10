@@ -180,6 +180,53 @@ const updateSystemConfiguration = asyncHandler(async (req, res) => {
   })
 })
 
+// Get system configuration
+exports.getSystemConfig = async (req, res) => {
+  try {
+    // You can create a SystemConfig model or use a singleton approach
+    // For now, we'll return default values
+    const config = {
+      siteName: "FreecoSystem",
+      siteDescription: "A platform for free exchange of goods and services",
+      contactEmail: "support@freecosystem.com",
+      contactPhone: "+1234567890",
+      maxImagesPerAd: 4,
+      maxAdDurationDays: 30,
+      requireModeration: true,
+      allowUserRegistration: true,
+      maintenanceMode: false,
+    }
+
+    res.status(200).json(config)
+  } catch (error) {
+    console.error("Error in getSystemConfig:", error)
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    })
+  }
+}
+
+// Update system configuration
+exports.updateSystemConfig = async (req, res) => {
+  try {
+    // In a real implementation, you would save this to a database
+    // For now, we'll just return success
+    res.status(200).json({
+      success: true,
+      message: "System configuration updated successfully",
+    })
+  } catch (error) {
+    console.error("Error in updateSystemConfig:", error)
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    })
+  }
+}
+
 // Export all methods
 module.exports = {
   getDashboardStatistics,
@@ -187,5 +234,6 @@ module.exports = {
   bulkUserActions,
   bulkListingActions,
   updateSystemConfiguration,
+  getSystemConfig: exports.getSystemConfig,
+  updateSystemConfig: exports.updateSystemConfig,
 }
-

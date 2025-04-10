@@ -5,11 +5,14 @@ const {
   getReceivedInterests,
   getSentInterests,
   respondToInterest,
+  checkInterest
 } = require("../controllers/interestController")
 const { protect } = require("../middleware/authMiddleware")
 
 // Create a new interest
 router.post("/", protect, createInterest)
+
+router.get("/check",protect,checkInterest)
 
 // Get received interests
 router.get("/received", protect, getReceivedInterests)

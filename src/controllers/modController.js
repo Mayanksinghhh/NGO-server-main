@@ -1,63 +1,349 @@
-const mongoose = require("mongoose")
 const User = require("../models/User")
-const Interest = require("../models/Interest") // Assuming you have an Interest model
-const Product = require("../models/ProductListing") // Assuming you have a Product model
+const ProductListing = require("../models/ProductListing")
+const ServiceListing = require("../models/ServiceListing")
+const JobListing = require("../models/JobListing")
+const MatrimonyListing = require("../models/MatrimonyListing")
+const Interest = require("../models/Interest")
+const Notification = require("../models/Notification")
+const mongoose = require("mongoose")
 
-// Get all profiles for moderation (paginated)
-exports.getProfilesForModeration = async (req, res) => {
+// Get listings for moderation
+exports.getListingsForModeration = async (req, res) => {
   try {
     const page = Number.parseInt(req.query.page) || 1
-    if (page < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "Page number must be a positive integer",
-      })
+    const limit = Number.parseInt(req.query.limit) || 10
+    const skip = (page - 1) * limit
+    const type = req.query.type || "all"
+    const status = req.query.status || "pending"
+
+    const query = { status: status }
+    let listings = []
+    let totalListings = 0
+
+    if (type === "all" || type === "product") {
+      const productListings = await ProductListing.find(query)
+        .populate("user", "firstName lastName email")
+        .sort({ createdAt: -1 })
+        .skip(type === "all" ? 0 : skip)
+        .limit(type === "all" ? 0 : limit)
+
+      const productCount = await ProductListing.countDocuments(query)
+
+      listings = [
+        ...listings,
+        ...productListings.map((listing) => ({
+          ...listing._doc,
+          listingType: "product",
+        })),
+      ]
+
+      totalListings += productCount
     }
 
-    const limit = 100 // 100 items per page
-    const skip = (page - 1) * limit
+    if (type === "all" || type === "service") {
+      const serviceListings = await ServiceListing.find(query)
+        .populate("user", "firstName lastName email")
+        .sort({ createdAt: -1 })
+        .skip(type === "all" ? 0 : skip)
+        .limit(type === "all" ? 0 : limit)
 
-    const profiles = await User.find({ role: "user" }).skip(skip).limit(limit).select("-password -otp -confirmPassword") // Exclude sensitive fields
+      const serviceCount = await ServiceListing.countDocuments(query)
+
+      listings = [
+        ...listings,
+        ...serviceListings.map((listing) => ({
+          ...listing._doc,
+          listingType: "service",
+        })),
+      ]
+
+      totalListings += serviceCount
+    }
+
+    if (type === "all" || type === "job") {
+      const jobListings = await JobListing.find(query)
+        .populate("user", "firstName lastName email")
+        .sort({ createdAt: -1 })
+        .skip(type === "all" ? 0 : skip)
+        .limit(type === "all" ? 0 : limit)
+
+      const jobCount = await JobListing.countDocuments(query)
+
+      listings = [
+        ...listings,
+        ...jobListings.map((listing) => ({
+          ...listing._doc,
+          listingType: "job",
+        })),
+      ]
+
+      totalListings += jobCount
+    }
+
+    if (type === "all" || type === "matrimony") {
+      const matrimonyListings = await MatrimonyListing.find(query)
+        .populate("user", "firstName lastName email")
+        .sort({ createdAt: -1 })
+        .skip(type === "all" ? 0 : skip)
+        .limit(type === "all" ? 0 : limit)
+
+      const matrimonyCount = await MatrimonyListing.countDocuments(query)
+
+      listings = [
+        ...listings,
+        ...matrimonyListings.map((listing) => ({
+          ...listing._doc,
+          listingType: "matrimony",
+        })),
+      ]
+
+      totalListings += matrimonyCount
+    }
+
+    // If we're getting all types, we need to sort and paginate the combined results
+    if (type === "all") {
+      listings.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      listings = listings.slice(skip, skip + limit)
+    }
+
+    const totalPages = Math.ceil(totalListings / limit)
 
     res.status(200).json({
       success: true,
-      data: profiles,
+      data: listings,
       page,
-      limit,
+      totalPages,
+      totalListings,
     })
   } catch (error) {
+    console.error("Error in getListingsForModeration:", error)
     res.status(500).json({
       success: false,
-      message: "Error fetching profiles for moderation",
+      message: "Server error",
       error: error.message,
     })
   }
 }
 
-// Approve or reject a profile
-exports.approveOrRejectProfile = async (req, res) => {
+// Approve or reject a listing
+exports.approveRejectListing = async (req, res) => {
   try {
-    const { userId, action } = req.body // action: 'approve' or 'reject'
+    const { listingId, listingType, action } = req.body
 
-    // Validate input
+    if (!listingId || !listingType || !action) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields",
+      })
+    }
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid action",
+      })
+    }
+
+    let Model
+    switch (listingType) {
+      case "product":
+        Model = ProductListing
+        break
+      case "service":
+        Model = ServiceListing
+        break
+      case "job":
+        Model = JobListing
+        break
+      case "matrimony":
+        Model = MatrimonyListing
+        break
+      default:
+        return res.status(400).json({
+          success: false,
+          message: "Invalid listing type",
+        })
+    }
+
+    const listing = await Model.findById(listingId).populate("user", "email")
+
+    if (!listing) {
+      return res.status(404).json({
+        success: false,
+        message: "Listing not found",
+      })
+    }
+
+    listing.status = action === "approve" ? "active" : "rejected"
+    await listing.save()
+
+    // Create notification for the user
+    await Notification.create({
+      recipient: listing.user._id,
+      type: "listing_moderation",
+      title: `Your ${listingType} listing has been ${action === "approve" ? "approved" : "rejected"}`,
+      message: `Your listing "${listing.title || listing.jobTitle}" has been ${action === "approve" ? "approved" : "rejected"} by a moderator.`,
+      relatedModel: listingType,
+      relatedId: listing._id,
+    })
+
+    res.status(200).json({
+      success: true,
+      message: `Listing ${action === "approve" ? "approved" : "rejected"} successfully`,
+    })
+  } catch (error) {
+    const { action } = req.body
+    console.error(`Error in ${action}Listing:`, error)
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    })
+  }
+}
+
+// Bulk approve or reject listings
+exports.bulkApproveRejectListings = async (req, res) => {
+  try {
+    const { listingIds, action } = req.body
+
+    if (!listingIds || !Array.isArray(listingIds) || listingIds.length === 0 || !action) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid request data",
+      })
+    }
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid action",
+      })
+    }
+
+    const results = {
+      success: [],
+      failed: [],
+    }
+
+    // Process each listing
+    for (const item of listingIds) {
+      try {
+        const { id, type } = item
+
+        let Model
+        switch (type) {
+          case "product":
+            Model = ProductListing
+            break
+          case "service":
+            Model = ServiceListing
+            break
+          case "job":
+            Model = JobListing
+            break
+          case "matrimony":
+            Model = MatrimonyListing
+            break
+          default:
+            results.failed.push({ id, type, error: "Invalid listing type" })
+            continue
+        }
+
+        const listing = await Model.findById(id).populate("user", "email")
+
+        if (!listing) {
+          results.failed.push({ id, type, error: "Listing not found" })
+          continue
+        }
+
+        listing.status = action === "approve" ? "active" : "rejected"
+        await listing.save()
+
+        // Create notification for the user
+        await Notification.create({
+          recipient: listing.user._id,
+          type: "listing_moderation",
+          title: `Your ${type} listing has been ${action === "approve" ? "approved" : "rejected"}`,
+          message: `Your listing "${listing.title || listing.jobTitle}" has been ${action === "approve" ? "approved" : "rejected"} by a moderator.`,
+          relatedModel: type,
+          relatedId: listing._id,
+        })
+
+        results.success.push({ id, type })
+      } catch (error) {
+        console.error(`Error processing listing ${item.id}:`, error)
+        results.failed.push({ id: item.id, type: item.type, error: error.message })
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Bulk ${action} completed`,
+      results,
+    })
+  } catch (error) {
+    console.error(`Error in bulkApproveRejectListings:`, error)
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    })
+  }
+}
+
+// Get users for moderation
+exports.getUsersForModeration = async (req, res) => {
+  try {
+    const page = Number.parseInt(req.query.page) || 1
+    const limit = Number.parseInt(req.query.limit) || 10
+    const skip = (page - 1) * limit
+    const status = req.query.status || "pending"
+
+    const query = { status: status }
+
+    const users = await User.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit)
+
+    const totalUsers = await User.countDocuments(query)
+    const totalPages = Math.ceil(totalUsers / limit)
+
+    res.status(200).json({
+      success: true,
+      data: users,
+      page,
+      totalPages,
+      totalUsers,
+    })
+  } catch (error) {
+    console.error("Error in getUsersForModeration:", error)
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    })
+  }
+}
+
+// Approve or reject a user
+exports.approveRejectUser = async (req, res) => {
+  try {
+    const { userId, action } = req.body
+
     if (!userId || !action) {
       return res.status(400).json({
         success: false,
-        message: "User ID and action are required",
+        message: "Missing required fields",
       })
     }
 
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
+    if (!["approve", "reject"].includes(action)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid User ID",
+        message: "Invalid action",
       })
     }
 
-    // Fetch the user and ensure required fields are present
-    const user = await User.findById(userId).select(
-      "city state pincode gender phoneNumber lastName firstName isApproved",
-    )
+    const user = await User.findById(userId)
 
     if (!user) {
       return res.status(404).json({
@@ -66,138 +352,170 @@ exports.approveOrRejectProfile = async (req, res) => {
       })
     }
 
-    // Check if required fields are present
-    const requiredFields = ["city", "state", "pincode", "gender", "phoneNumber", "lastName", "firstName"]
-    const missingFields = requiredFields.filter((field) => !user[field])
-
-    if (missingFields.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: "User profile is incomplete",
-        missingFields,
-      })
-    }
-
-    // Validate the action
-    if (action !== "approve" && action !== "reject") {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid action. Use "approve" or "reject"',
-      })
-    }
-
-    // Update the user's approval status
-    user.isApproved = action === "approve"
+    user.status = action === "approve" ? "active" : "inactive"
     await user.save()
 
+    // Create notification for the user
+    await Notification.create({
+      recipient: user._id,
+      type: "account_moderation",
+      title: `Your account has been ${action === "approve" ? "approved" : "rejected"}`,
+      message: `Your account has been ${action === "approve" ? "approved" : "rejected"} by a moderator.`,
+      relatedModel: "user",
+      relatedId: user._id,
+    })
+
     res.status(200).json({
       success: true,
-      message: `Profile ${action}ed successfully`,
-      data: {
-        userId: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        isApproved: user.isApproved,
-      },
+      message: `User ${action === "approve" ? "approved" : "rejected"} successfully`,
     })
   } catch (error) {
+    console.error(`Error in approveRejectUser:`, error)
     res.status(500).json({
       success: false,
-      message: "Error approving/rejecting profile",
+      message: "Server error",
       error: error.message,
     })
   }
 }
 
-// Bulk approve or reject profiles
-exports.bulkApproveOrRejectProfiles = async (req, res) => {
+// Bulk approve or reject users
+exports.bulkApproveRejectUsers = async (req, res) => {
   try {
-    const { userIds, action } = req.body // action: 'approve' or 'reject'
+    const { userIds, action } = req.body
 
-    // Validate input
-    if (!Array.isArray(userIds) || userIds.length === 0 || !action) {
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0 || !action) {
       return res.status(400).json({
         success: false,
-        message: "User IDs (array) and action are required",
+        message: "Invalid request data",
       })
     }
 
-    // Validate each userId in the array
-    const invalidIds = userIds.filter((id) => !mongoose.Types.ObjectId.isValid(id))
-    if (invalidIds.length > 0) {
+    if (!["approve", "reject"].includes(action)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid User IDs found in the array",
-        invalidIds,
+        message: "Invalid action",
       })
     }
 
-    const updateQuery = action === "approve" ? { isApproved: true } : { isApproved: false }
+    const results = {
+      success: [],
+      failed: [],
+    }
 
-    await User.updateMany({ _id: { $in: userIds } }, updateQuery)
+    // Process each user
+    for (const userId of userIds) {
+      try {
+        const user = await User.findById(userId)
+
+        if (!user) {
+          results.failed.push({ id: userId, error: "User not found" })
+          continue
+        }
+
+        user.status = action === "approve" ? "active" : "inactive"
+        await user.save()
+
+        // Create notification for the user
+        await Notification.create({
+          recipient: user._id,
+          type: "account_moderation",
+          title: `Your account has been ${action === "approve" ? "approved" : "rejected"}`,
+          message: `Your account has been ${action === "approve" ? "approved" : "rejected"} by a moderator.`,
+          relatedModel: "user",
+          relatedId: user._id,
+        })
+
+        results.success.push({ id: userId })
+      } catch (error) {
+        console.error(`Error processing user ${userId}:`, error)
+        results.failed.push({ id: userId, error: error.message })
+      }
+    }
 
     res.status(200).json({
       success: true,
-      message: `Profiles ${action}ed in bulk successfully`,
+      message: `Bulk ${action} completed`,
+      results,
     })
   } catch (error) {
+    console.error(`Error in bulkApproveRejectUsers:`, error)
     res.status(500).json({
       success: false,
-      message: "Error performing bulk action",
+      message: "Server error",
       error: error.message,
     })
   }
 }
 
-// Get list of interests shown
-exports.getInterests = async (req, res) => {
+// Get interests for moderation
+exports.getInterestsForModeration = async (req, res) => {
   try {
     const page = Number.parseInt(req.query.page) || 1
-    const limit = Number.parseInt(req.query.limit) || 100 // Default limit to 100 items per page
+    const limit = Number.parseInt(req.query.limit) || 10
     const skip = (page - 1) * limit
+    const status = req.query.status || "pending"
 
-    const interests = await Interest.find({})
+    const query = { status: status }
+
+    const interests = await Interest.find(query)
+      .populate("sender", "firstName lastName email")
+      .populate("receiver", "firstName lastName email")
+      .populate({
+        path: "listing",
+        select: "title jobTitle",
+      })
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate("userId", "firstName lastName email") // Populate user details
-      .populate("productId", "name place quantity") // Populate product details
+
+    const totalInterests = await Interest.countDocuments(query)
+    const totalPages = Math.ceil(totalInterests / limit)
 
     res.status(200).json({
       success: true,
       data: interests,
       page,
-      limit,
+      totalPages,
+      totalInterests,
     })
   } catch (error) {
+    console.error("Error in getInterestsForModeration:", error)
     res.status(500).json({
       success: false,
-      message: "Error fetching interests",
+      message: "Server error",
       error: error.message,
     })
   }
 }
 
 // Approve or reject an interest
-exports.approveOrRejectInterest = async (req, res) => {
+exports.approveRejectInterest = async (req, res) => {
   try {
-    const { interestId, action } = req.body // action: 'approve' or 'reject'
+    const { interestId, action } = req.body
 
-    // Validate input
     if (!interestId || !action) {
       return res.status(400).json({
         success: false,
-        message: "Interest ID and action are required",
+        message: "Missing required fields",
       })
     }
 
-    if (!mongoose.Types.ObjectId.isValid(interestId)) {
+    if (!["approve", "reject"].includes(action)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid Interest ID",
+        message: "Invalid action",
       })
     }
 
     const interest = await Interest.findById(interestId)
+      .populate("sender", "email")
+      .populate("receiver", "email")
+      .populate({
+        path: "listing",
+        select: "title jobTitle",
+      })
+
     if (!interest) {
       return res.status(404).json({
         success: false,
@@ -205,323 +523,126 @@ exports.approveOrRejectInterest = async (req, res) => {
       })
     }
 
-    if (action === "approve") {
-      interest.isApproved = true
-    } else if (action === "reject") {
-      interest.isApproved = false
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid action. Use "approve" or "reject"',
-      })
-    }
-
+    interest.status = action === "approve" ? "approved" : "rejected"
     await interest.save()
 
-    res.status(200).json({
-      success: true,
-      message: `Interest ${action}ed successfully`,
+    // Create notification for both sender and receiver
+    await Notification.create({
+      recipient: interest.sender._id,
+      type: "interest_moderation",
+      title: `Your interest has been ${action === "approve" ? "approved" : "rejected"}`,
+      message: `Your interest in "${interest.listing?.title || interest.listing?.jobTitle}" has been ${action === "approve" ? "approved" : "rejected"} by a moderator.`,
+      relatedModel: "interest",
+      relatedId: interest._id,
     })
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error approving/rejecting interest",
-      error: error.message,
-    })
-  }
-}
 
-// Add functionality for ad approval/rejection
-// Add these functions to the modController.js file
-
-// Get all listings for moderation (paginated)
-exports.getListingsForModeration = async (req, res) => {
-  try {
-    const page = Number.parseInt(req.query.page) || 1
-    const limit = Number.parseInt(req.query.limit) || 10
-    const skip = (page - 1) * limit
-    const type = req.query.type || "all" // 'all', 'product', 'service', 'job', 'matrimony'
-
-    let listings = []
-    let totalListings = 0
-
-    // Define models to query based on type
-    const modelsToQuery =
-      type === "all"
-        ? [
-            { model: require("../models/ProductListing"), name: "product" },
-            { model: require("../models/ServiceListing"), name: "service" },
-            { model: require("../models/JobListing"), name: "job" },
-            { model: require("../models/MatrimonyListing"), name: "matrimony" },
-          ]
-        : [
-            {
-              model: require(`../models/${type.charAt(0).toUpperCase() + type.slice(1)}Listing`),
-              name: type,
-            },
-          ]
-
-    // Get counts and listings from each model
-    const results = await Promise.all(
-      modelsToQuery.map(async ({ model, name }) => {
-        const count = await model.countDocuments()
-        const items = await model
-          .find()
-          .sort({ createdAt: -1 })
-          .skip(type === "all" ? 0 : skip)
-          .limit(type === "all" ? limit / modelsToQuery.length : limit)
-          .populate("user", "firstName lastName email")
-
-        return {
-          type: name,
-          count,
-          items: items.map((item) => ({
-            ...item.toObject(),
-            listingType: name,
-          })),
-        }
-      }),
-    )
-
-    // Combine results
-    if (type === "all") {
-      results.forEach((result) => {
-        listings = [...listings, ...result.items]
-        totalListings += result.count
-      })
-    } else {
-      listings = results[0].items
-      totalListings = results[0].count
-    }
-
-    res.status(200).json({
-      success: true,
-      count: listings.length,
-      totalListings,
-      totalPages: Math.ceil(totalListings / limit),
-      currentPage: page,
-      data: listings,
-    })
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error fetching listings for moderation",
-      error: error.message,
-    })
-  }
-}
-
-// Approve or reject a listing
-exports.approveOrRejectListing = async (req, res) => {
-  try {
-    const { listingId, listingType, action } = req.body
-
-    if (!listingId || !listingType || !action) {
-      return res.status(400).json({
-        success: false,
-        message: "Listing ID, type, and action are required",
-      })
-    }
-
-    // Get the appropriate model
-    const ListingModel = {
-      product: require("../models/ProductListing"),
-      service: require("../models/ServiceListing"),
-      job: require("../models/JobListing"),
-      matrimony: require("../models/MatrimonyListing"),
-    }[listingType]
-
-    if (!ListingModel) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid listing type",
-      })
-    }
-
-    // Find the listing
-    const listing = await ListingModel.findById(listingId)
-    if (!listing) {
-      return res.status(404).json({
-        success: false,
-        message: "Listing not found",
-      })
-    }
-
-    // Update status based on action
     if (action === "approve") {
-      listing.status = "active"
-    } else if (action === "reject") {
-      listing.status = "inactive"
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid action. Use "approve" or "reject"',
+      await Notification.create({
+        recipient: interest.receiver._id,
+        type: "interest_received",
+        title: "You have received an interest",
+        message: `${interest.sender.firstName} ${interest.sender.lastName} has shown interest in your listing "${interest.listing?.title || interest.listing?.jobTitle}".`,
+        relatedModel: "interest",
+        relatedId: interest._id,
       })
     }
 
-    await listing.save()
-
-    // Create notification for the listing owner
-    const Notification = require("../models/Notification")
-    await Notification.createNotification({
-      user: listing.user,
-      type: action === "approve" ? "listing_approved" : "listing_rejected",
-      content: `Your ${listingType} listing has been ${action === "approve" ? "approved" : "rejected"}`,
-      relatedEntity: {
-        entityId: listing._id,
-        type: "Listing",
-      },
-    })
-
     res.status(200).json({
       success: true,
-      message: `Listing ${action}d successfully`,
-      data: listing,
+      message: `Interest ${action === "approve" ? "approved" : "rejected"} successfully`,
     })
   } catch (error) {
+    console.error(`Error in approveRejectInterest:`, error)
     res.status(500).json({
       success: false,
-      message: "Error processing listing",
+      message: "Server error",
       error: error.message,
     })
   }
 }
 
-// Bulk approve or reject listings
-exports.bulkApproveOrRejectListings = async (req, res) => {
+// Bulk approve or reject interests
+exports.bulkApproveRejectInterests = async (req, res) => {
   try {
-    const { listingIds, listingTypes, action } = req.body
+    const { interestIds, action } = req.body
 
-    if (
-      !listingIds ||
-      !listingTypes ||
-      !action ||
-      !Array.isArray(listingIds) ||
-      !Array.isArray(listingTypes) ||
-      listingIds.length !== listingTypes.length
-    ) {
+    if (!interestIds || !Array.isArray(interestIds) || interestIds.length === 0 || !action) {
       return res.status(400).json({
         success: false,
-        message: "Valid listing IDs, types arrays, and action are required",
+        message: "Invalid request data",
+      })
+    }
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid action",
       })
     }
 
     const results = {
-      total: listingIds.length,
-      processed: 0,
-      failed: 0,
-      notifications: 0,
+      success: [],
+      failed: [],
     }
 
-    const Notification = require("../models/Notification")
-
-    // Process each listing
-    for (let i = 0; i < listingIds.length; i++) {
+    // Process each interest
+    for (const interestId of interestIds) {
       try {
-        const listingId = listingIds[i]
-        const listingType = listingTypes[i]
+        const interest = await Interest.findById(interestId)
+          .populate("sender", "firstName lastName email")
+          .populate("receiver", "email")
+          .populate({
+            path: "listing",
+            select: "title jobTitle",
+          })
 
-        // Get the appropriate model
-        const ListingModel = {
-          product: require("../models/ProductListing"),
-          service: require("../models/ServiceListing"),
-          job: require("../models/JobListing"),
-          matrimony: require("../models/MatrimonyListing"),
-        }[listingType]
+        if (!interest) {
+          results.failed.push({ id: interestId, error: "Interest not found" })
+          continue
+        }
 
-        if (!ListingModel) continue
+        interest.status = action === "approve" ? "approved" : "rejected"
+        await interest.save()
 
-        // Find and update the listing
-        const listing = await ListingModel.findById(listingId)
-        if (!listing) continue
-
-        // Update status based on action
-        listing.status = action === "approve" ? "active" : "inactive"
-        await listing.save()
-        results.processed++
-
-        // Create notification
-        await Notification.createNotification({
-          user: listing.user,
-          type: action === "approve" ? "listing_approved" : "listing_rejected",
-          content: `Your ${listingType} listing has been ${action === "approve" ? "approved" : "rejected"}`,
-          relatedEntity: {
-            entityId: listing._id,
-            type: "Listing",
-          },
+        // Create notification for both sender and receiver
+        await Notification.create({
+          recipient: interest.sender._id,
+          type: "interest_moderation",
+          title: `Your interest has been ${action === "approve" ? "approved" : "rejected"}`,
+          message: `Your interest in "${interest.listing?.title || interest.listing?.jobTitle}" has been ${action === "approve" ? "approved" : "rejected"} by a moderator.`,
+          relatedModel: "interest",
+          relatedId: interest._id,
         })
-        results.notifications++
+
+        if (action === "approve") {
+          await Notification.create({
+            recipient: interest.receiver._id,
+            type: "interest_received",
+            title: "You have received an interest",
+            message: `${interest.sender.firstName} ${interest.sender.lastName} has shown interest in your listing "${interest.listing?.title || interest.listing?.jobTitle}".`,
+            relatedModel: "interest",
+            relatedId: interest._id,
+          })
+        }
+
+        results.success.push({ id: interestId })
       } catch (error) {
-        results.failed++
-        console.error(`Error processing listing ${i}:`, error)
+        console.error(`Error processing interest ${interestId}:`, error)
+        results.failed.push({ id: interestId, error: error.message })
       }
     }
 
     res.status(200).json({
       success: true,
-      message: `Processed ${results.processed} out of ${results.total} listings`,
+      message: `Bulk ${action} completed`,
       results,
     })
   } catch (error) {
+    console.error(`Error in bulkApproveRejectInterests:`, error)
     res.status(500).json({
       success: false,
-      message: "Error processing bulk listings",
+      message: "Server error",
       error: error.message,
     })
   }
 }
-
-// Add this new function after bulkApproveOrRejectListings
-
-// @desc    Get all listing IDs for bulk operations
-// @route   GET /api/mod/listings/all-ids
-exports.getAllListingIds = async (req, res) => {
-  try {
-    const type = req.query.type || "all" // 'all', 'product', 'service', 'job', 'matrimony'
-
-    // Define models to query based on type
-    const modelsToQuery =
-      type === "all"
-        ? [
-            { model: require("../models/ProductListing"), name: "product" },
-            { model: require("../models/ServiceListing"), name: "service" },
-            { model: require("../models/JobListing"), name: "job" },
-            { model: require("../models/MatrimonyListing"), name: "matrimony" },
-          ]
-        : [
-            {
-              model: require(`../models/${type.charAt(0).toUpperCase() + type.slice(1)}Listing`),
-              name: type,
-            },
-          ]
-
-    // Get IDs from each model
-    const results = await Promise.all(
-      modelsToQuery.map(async ({ model, name }) => {
-        const items = await model.find().select("_id")
-        return {
-          type: name,
-          ids: items.map((item) => item._id.toString()),
-        }
-      }),
-    )
-
-    // Combine results
-    const allIds = {}
-    results.forEach((result) => {
-      allIds[result.type] = result.ids
-    })
-
-    res.status(200).json({
-      success: true,
-      data: type === "all" ? allIds : allIds[type],
-    })
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error fetching listing IDs",
-      error: error.message,
-    })
-  }
-}
-

@@ -7,7 +7,7 @@ const bcrypt = require("bcrypt")
 const transporter = nodemailer.createTransport({
   service: "gmail", // Or your preferred email service
   auth: {
-    user: process.env.EMAIL_USER,
+    user: process.env.EMAIL_USER, 
     pass: process.env.EMAIL_PASS,
   },
 })
@@ -20,14 +20,13 @@ exports.registerUser = async (req, res) => {
     req.body
 
     console.log(req.body) 
-  // Check if any required field is missing
-  // if (!firstName || !lastName || !email || !phoneNumber || !gender || !pincode || !state || !city || !password || !confirmPassword) {
-  //     return res.status(400).json({
-  //         success: false,
-  //         message: "All fields are required."
-  //         error:
-  //     });
-  // }
+  if (!firstName || !lastName || !email || !phoneNumber || !gender || !pincode || !state || !city || !password || !confirmPassword) {
+      return res.status(400).json({
+          success: false,
+          message: "All fields are required.",
+          error: error.message
+      });
+  }
 
   try {
     // Check if user already exists

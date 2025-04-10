@@ -2,10 +2,10 @@
   "name": "freecosystem",
   "version": "1.0.0",
   "description": "Free Ecosystem Marketplace Platform",
-  "main": "server.js",
+  "main": "src/app.js",
   "scripts": {
     "start": "nodemon src/app.js",
-    "dev": "nodemon server.js",
+    "dev": "nodemon src/app.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
