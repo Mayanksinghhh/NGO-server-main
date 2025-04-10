@@ -9,7 +9,7 @@ dotenv.config() // Load environment variables
 
 // Initialize Express
 const app = express()
-app.use(cors({ origin: "https://ngo-client-main-phi.vercel.app/", credentials: true }));
+app.use(cors());
 
 // Security Middleware
 app.use(helmet()) // Adds various HTTP headers for security
